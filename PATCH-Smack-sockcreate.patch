@@ -1,0 +1,174 @@
+From a8849f51b921905382f1801df031122f88061b73 Mon Sep 17 00:00:00 2001
+From: changyaoh <changyaoh@gmail.com>
+Date: Mon, 13 Jan 2014 16:43:08 +0800
+Subject:[PATCH] Smack:Add sockincreate and sockoutcreate node to
+ attr/ interfaces
+
+Below is a patch to add two new nodes :
+/proc/self/attr/sockincreate and /proc/self/sockoutcreate ,
+sockincreate is for smk_in label , sockoutcreate is for smk_out label .
+A process may write label into given interface and all subsequent sockets
+created will be labeled with that label .
+The idea comes from SELinux's  /proc/self/attr/sockcreate node.
+
+Signed-off-by: changyaoh <changyaoh@gmail.com>
+---
+ fs/proc/base.c             |  5 ++++
+ security/smack/smack.h     |  2 ++
+ security/smack/smack_lsm.c | 63 +++++++++++++++++++++++++++++++++-------------
+ 3 files changed, 53 insertions(+), 17 deletions(-)
+
+diff --git a/fs/proc/base.c b/fs/proc/base.c
+index 1485e38..2e4b84f 100644
+--- a/fs/proc/base.c
++++ b/fs/proc/base.c
+@@ -2293,6 +2293,11 @@ static const struct pid_entry attr_dir_stuff[] = {
+ 	REG("fscreate",   S_IRUGO|S_IWUGO, proc_pid_attr_operations),
+ 	REG("keycreate",  S_IRUGO|S_IWUGO, proc_pid_attr_operations),
+ 	REG("sockcreate", S_IRUGO|S_IWUGO, proc_pid_attr_operations),
++#ifdef CONFIG_SECURITY_SMACK
++        REG("sockincreate", S_IRUGO|S_IWUGO, proc_pid_attr_operations),
++        REG("sockoutcreate", S_IRUGO|S_IWUGO, proc_pid_attr_operations),
++#endif
++
+ };
+ 
+ static int proc_attr_dir_readdir(struct file *file, struct dir_context *ctx)
+diff --git a/security/smack/smack.h b/security/smack/smack.h
+index 076b8e8..c91a970 100644
+--- a/security/smack/smack.h
++++ b/security/smack/smack.h
+@@ -98,6 +98,8 @@ struct inode_smack {
+ struct task_smack {
+ 	struct smack_known	*smk_task;	/* label for access control */
+ 	struct smack_known	*smk_forked;	/* label when forked */
++	struct smack_known      *smk_sk_in;        /* label for socket in*/
++        struct smack_known      *smk_sk_out;      /*label for socket out*/
+ 	struct list_head	smk_rules;	/* per task access rules */
+ 	struct mutex		smk_rules_lock;	/* lock for the rules */
+ };
+diff --git a/security/smack/smack_lsm.c b/security/smack/smack_lsm.c
+index 8825375..af37196 100644
+--- a/security/smack/smack_lsm.c
++++ b/security/smack/smack_lsm.c
+@@ -502,6 +502,8 @@ static int smack_bprm_set_creds(struct linux_binprm *bprm)
+ 		return -EPERM;
+ 
+ 	bsp->smk_task = isp->smk_task;
++	bsp->smk_sk_in = NULL;
++	bsp->smk_sk_out = NULL;
+ 	bprm->per_clear |= PER_CLEAR_ON_SETID;
+ 
+ 	return 0;
+@@ -1460,6 +1462,9 @@ static int smack_cred_prepare(struct cred *new, const struct cred *old,
+ 	if (new_tsp == NULL)
+ 		return -ENOMEM;
+ 
++	new_tsp->smk_sk_in = old_tsp->smk_sk_in;
++        new_tsp->smk_sk_out = old_tsp->smk_sk_out;
++
+ 	rc = smk_copy_rules(&new_tsp->smk_rules, &old_tsp->smk_rules, gfp);
+ 	if (rc != 0)
+ 		return rc;
+@@ -1505,6 +1510,8 @@ static int smack_kernel_act_as(struct cred *new, u32 secid)
+ 		return -EINVAL;
+ 
+ 	new_tsp->smk_task = skp;
++	new_tsp->smk_sk_in = NULL;
++        new_tsp->smk_sk_out = NULL;
+ 	return 0;
+ }
+ 
+@@ -1765,19 +1772,26 @@ static void smack_task_to_inode(struct task_struct *p, struct inode *inode)
+  */
+ static int smack_sk_alloc_security(struct sock *sk, int family, gfp_t gfp_flags)
+ {
+-	struct smack_known *skp = smk_of_current();
+-	struct socket_smack *ssp;
++        struct smack_known *skp = smk_of_current();
++        struct task_smack *tsp = current_security();
++        struct socket_smack *ssp;
+ 
+-	ssp = kzalloc(sizeof(struct socket_smack), gfp_flags);
+-	if (ssp == NULL)
+-		return -ENOMEM;
++        ssp = kzalloc(sizeof(struct socket_smack), gfp_flags);
++        if (ssp == NULL)
++            return -ENOMEM;
+ 
+-	ssp->smk_in = skp->smk_known;
+-	ssp->smk_out = skp;
+-	ssp->smk_packet = NULL;
++        if (tsp->smk_sk_in)
++            ssp->smk_in = tsp->smk_sk_in->smk_known;
++        else
++            ssp->smk_in = skp->smk_known;
+ 
+-	sk->sk_security = ssp;
++        if (tsp->smk_sk_out)
++	    ssp->smk_out = tsp->smk_sk_out;
++        else
++            ssp->smk_out = skp;
+ 
++        ssp->smk_packet = NULL;
++        sk->sk_security = ssp;
+ 	return 0;
+ }
+ 
+@@ -2873,13 +2887,22 @@ unlockandout:
+  */
+ static int smack_getprocattr(struct task_struct *p, char *name, char **value)
+ {
+-	struct smack_known *skp = smk_of_task(task_security(p));
++        struct smack_known *skp;
++        struct task_smack *tsp = current_security() ;
+ 	char *cp;
+ 	int slen;
+-
+-	if (strcmp(name, "current") != 0)
+-		return -EINVAL;
+-
++			   
++        if (!strcmp(name, "current"))
++             skp = tsp->smk_task;
++        else if (!strcmp(name,"sockincreate"))
++             skp = tsp->smk_sk_in;
++        else if (!strcmp(name,"sockoutcreate"))
++             skp = tsp->smk_sk_out;
++        else
++             return -EINVAL;
++							       
++        if (skp == NULL)
++                return 0;
+ 	cp = kstrdup(skp->smk_known, GFP_KERNEL);
+ 	if (cp == NULL)
+ 		return -ENOMEM;
+@@ -2921,8 +2944,8 @@ static int smack_setprocattr(struct task_struct *p, char *name,
+ 	if (value == NULL || size == 0 || size >= SMK_LONGLABEL)
+ 		return -EINVAL;
+ 
+-	if (strcmp(name, "current") != 0)
+-		return -EINVAL;
++        if (strcmp(name, "current") != 0 && strcmp(name,"sockincreate") != 0 && strcmp(name,"sockoutcreate") != 0)
++	        return -EINVAL;
+ 
+ 	skp = smk_import_entry(value, size);
+ 	if (skp == NULL)
+@@ -2939,7 +2962,13 @@ static int smack_setprocattr(struct task_struct *p, char *name,
+ 		return -ENOMEM;
+ 
+ 	tsp = new->security;
+-	tsp->smk_task = skp;
++	
++        if (!strcmp(name,"sockincreate")) 
++             tsp->smk_sk_in = skp;
++        else if (!strcmp(name,"sockoutcreate")) 
++             tsp->smk_sk_out = skp;
++        else if (!strcmp(name,"current"))
++             tsp->smk_task = skp;
+ 
+ 	commit_creds(new);
+ 	return size;
+-- 
+1.8.5.2
+

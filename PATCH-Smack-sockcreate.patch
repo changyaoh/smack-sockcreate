@@ -1,7 +1,7 @@
-From 8efa0691b35d6d0c0cbba73ad5610b8673f18f44 Mon Sep 17 00:00:00 2001
+From e2238f5c7c7e6c12ab34e8a932797110047eaf5b Mon Sep 17 00:00:00 2001
 From: changyaoh <changyaoh@gmail.com>
-Date: Sun, 16 Feb 2014 15:28:21 +0800
-Subject:[PATCH] Smack:Add sockincreate and sockoutcreate node to
+Date: Mon, 10 Mar 2014 20:44:07 +0800
+Subject: [PATCH] Smack:Add sockincreate and sockoutcreate node to
  attr/interfaces
 
 Below is a patch to add two new nodes :
@@ -9,7 +9,7 @@ Below is a patch to add two new nodes :
 sockincreate is for smk_in label , sockoutcreate is for smk_out label .
 A process may write label into given interface and all subsequent sockets
 created will be labeled with that label .
-The idea comes from SELinux's  /proc/self/attr/sockcreate node.
+The idea comes from SELinux's  /proc/self/attr/sockcreate node
 
 Signed-off-by: changyaoh <changyaoh@gmail.com>
 ---
@@ -47,7 +47,7 @@ index 076b8e8..154c59b 100644
  	struct mutex		smk_rules_lock;	/* lock for the rules */
  };
 diff --git a/security/smack/smack_lsm.c b/security/smack/smack_lsm.c
-index 8825375..2fac057 100644
+index 8825375..df5817a 100644
 --- a/security/smack/smack_lsm.c
 +++ b/security/smack/smack_lsm.c
 @@ -502,6 +502,8 @@ static int smack_bprm_set_creds(struct linux_binprm *bprm)
@@ -108,7 +108,7 @@ index 8825375..2fac057 100644
  {
 -	struct smack_known *skp = smk_of_task(task_security(p));
 +	struct smack_known *skp;
-+	struct task_smack *tsp = current_security();
++	struct task_smack *tsp = task_security(p);
  	char *cp;
  	int slen;
  
@@ -131,7 +131,7 @@ index 8825375..2fac057 100644
  		return -EINVAL;
  
 -	if (strcmp(name, "current") != 0)
-+	if (strcmp(name, "current") != 0 && strcmp(name,"sockincreate") != 0 && strcmp(name,"sockoutcreate") != 0)
++	if (strcmp(name, "current") != 0 && strcmp(name,"sockincreate") !=     0 && strcmp(name,"sockoutcreate") != 0)
  		return -EINVAL;
  
  	skp = smk_import_entry(value, size);
